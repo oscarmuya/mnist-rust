@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use colored::Colorize;
-use ndarray::{Array1, Array2, Axis};
+use ndarray::{Array1, Array2, Axis, s};
 use rand_distr::{Distribution, Normal};
 use std::{
     fs::{self, File},
@@ -8,8 +8,8 @@ use std::{
 };
 
 const NEURON_SIZE: usize = 128;
-const EPOCH: usize = 40;
-const LEARNING_RATE: f64 = 0.01;
+const EPOCH: usize = 100;
+const LEARNING_RATE: f64 = 0.1;
 const BIAS_1: f64 = 0.0;
 const BIAS_2: f64 = 0.0;
 
@@ -137,6 +137,7 @@ fn train_model() {
     let training_images_path = "./dataset/train-images.idx3-ubyte";
 
     let sample_count = 6000;
+    let batch_size = 60;
 
     println!(
         "{} Loading labels from: {}",
@@ -245,31 +246,35 @@ fn train_model() {
         let mut correct = 0;
         let mut total_loss = 0.0_f64;
 
-        for (i, row) in training_images.rows().into_iter().enumerate() {
+        for (i, batch) in training_images
+            .axis_chunks_iter(Axis(0), batch_size)
+            .enumerate()
+        {
+            // for (i, row) in training_images.rows().into_iter().enumerate() {
             // -----------------------------------------------------------------
             // Forward pass
             // -----------------------------------------------------------------
 
             // Z1 = input · W1 + b1
             // Linear transformation from input space [784] to hidden space [128]
-            // Shape: [1 x 128]
-            let z1 = row2d(row.dot(&w1) + &b1);
+            // Shape: [N x 128]
+            let z1 = batch.dot(&w1) + &b1;
 
             // A1 = ReLU(Z1)
             // ReLU (Rectified Linear Unit) zeroes out negative activations,
             // introducing non-linearity so the network can learn complex patterns.
-            // Shape: [1 x 128]
+            // Shape: [N x 128]
             let a1 = z1.mapv(|x| x.max(0.0));
 
             // Z2 = A1 · W2 + b2
             // Linear transformation from hidden space [128] to output space [10]
-            // Shape: [1 x 10]
+            // Shape: [N x 10]
             let z2 = a1.dot(&w2) + &b2;
 
             // output = softmax(Z2)
             // Converts raw logits into a probability distribution over 10 classes.
             // All values are in (0, 1) and sum to 1.
-            // Shape: [1 x 10]
+            // Shape: [N x 10]
             let output = softmax(z2);
 
             // -----------------------------------------------------------------
@@ -282,33 +287,38 @@ fn train_model() {
 
             // dL/dZ2 = predicted probability - one-hot true label
             // This is the error signal for the output layer.
-            // Shape: [1 x 10]
-            let dz2 = &output - &training_labels.row(i);
+            // Shape: [N x 10]
+
+            let label_row = training_labels.slice(s![i * batch_size..(i + 1) * batch_size, ..]);
+            let dz2 = &output - &label_row;
 
             // Track cross-entropy loss for logging: -sum(y * log(p))
-            let label_row = training_labels.row(i);
             let loss: f64 = label_row
                 .iter()
                 .zip(output.iter())
                 .map(|(y, p)| -y * p.ln().max(-100.0))
                 .sum();
-            total_loss += loss;
+            total_loss += loss / batch_size as f64;
 
             // Track accuracy for logging
-            let pred = output
-                .iter()
-                .enumerate()
-                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
-                .map(|(idx, _)| idx)
-                .unwrap_or(0);
-            let actual = label_row
-                .iter()
-                .enumerate()
-                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
-                .map(|(idx, _)| idx)
-                .unwrap_or(0);
-            if pred == actual {
-                correct += 1;
+            for k in 0..batch_size {
+                let pred = output
+                    .row(k)
+                    .iter()
+                    .enumerate()
+                    .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                    .map(|(idx, _)| idx)
+                    .unwrap_or(0);
+                let actual = label_row
+                    .row(k)
+                    .iter()
+                    .enumerate()
+                    .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                    .map(|(idx, _)| idx)
+                    .unwrap_or(0);
+                if pred == actual {
+                    correct += 1;
+                }
             }
 
             // -----------------------------------------------------------------
@@ -320,36 +330,36 @@ fn train_model() {
 
             // dL/dW2 = A1ᵀ · dZ2
             // How much each weight in W2 is responsible for the output error.
-            // Shape: [128 x 10]  ([128x1] . [1x10])
+            // Shape: [128 x 10]  ([128xN] . [Nx10])
             let dw2 = a1.t().dot(&dz2);
 
             // dL/dA1 = dZ2 · W2ᵀ
             // Propagate error back through W2 into the hidden layer.
-            // Shape: [1 x 128]
+            // Shape: [N x 128]
             let da1 = dz2.dot(&w2.t());
 
             // dA1/dZ1 = ReLU'(Z1) = 1 if Z1 > 0, else 0
             // The derivative of ReLU: passes gradient only where Z1 was positive.
-            // Shape: [1 x 128]
+            // Shape: [N x 128]
             let t = z1.mapv(|v| if v > 0.0 { 1.0 } else { 0.0 });
 
             // dL/dZ1 = dL/dA1 * ReLU'(Z1)
             // Chain rule: combine hidden layer error with ReLU gate.
-            // Shape: [1 x 128]
+            // Shape: [N x 128]
             let dz1 = da1 * t;
 
             // dL/dW1 = inputᵀ · dZ1
             // How much each weight in W1 is responsible for the hidden layer error.
-            // Shape: [784 x 128]  ([784x1] . [1x128])
-            let dw1 = row.insert_axis(Axis(0)).t().dot(&dz1);
+            // Shape: [784 x 128]  ([784xN] . [Nx128])
+            let dw1 = batch.t().dot(&dz1);
 
             // dL/db2 = sum(dZ2)
             // Bias gradient for output layer (scalar collapsed from [1x10]).
-            let db2 = dz2.sum();
+            let db2: Array1<f64> = dz2.sum_axis(Axis(0));
 
             // dL/db1 = sum(dZ1)
             // Bias gradient for hidden layer (scalar collapsed from [1x128]).
-            let db1 = dz1.sum();
+            let db1: Array1<f64> = dz1.sum_axis(Axis(0));
 
             // -----------------------------------------------------------------
             // Gradient descent parameter update
@@ -357,10 +367,10 @@ fn train_model() {
             // theta = theta - learning_rate * d(theta)
             // We step each parameter opposite to its gradient to reduce loss.
             // -----------------------------------------------------------------
-            w1 = w1 - LEARNING_RATE * dw1;
-            w2 = w2 - LEARNING_RATE * dw2;
-            b1 -= LEARNING_RATE * db1;
-            b2 -= LEARNING_RATE * db2;
+            w1 = w1 - LEARNING_RATE * dw1 / batch_size as f64;
+            w2 = w2 - LEARNING_RATE * dw2 / batch_size as f64;
+            b1 = b1 - LEARNING_RATE * db1 / batch_size as f64;
+            b2 = b2 - LEARNING_RATE * db2 / batch_size as f64;
         }
 
         // Epoch summary log
@@ -485,8 +495,10 @@ fn row2d(row: Array1<f64>) -> Array2<f64> {
 fn softmax(vec: Array2<f64>) -> Array2<f64> {
     let mut result = vec.clone();
 
-    let sum: f64 = result.iter().map(|v| v.exp()).sum();
-    result.mapv_inplace(|v| v.exp() / sum);
+    for mut row in result.rows_mut() {
+        let sum: f64 = row.iter().map(|v| v.exp()).sum();
+        row.mapv_inplace(|v| v.exp() / sum);
+    }
 
     result
 }
