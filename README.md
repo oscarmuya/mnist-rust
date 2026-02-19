@@ -30,6 +30,7 @@ cargo run -- test
 
 ### Current Accuracy
 
+```
 ─────────────────────────────────────────
 [-] Test Results
 ─────────────────────────────────────────
@@ -38,6 +39,7 @@ cargo run -- test
   Incorrect      : 59
   Accuracy       : 94.10%  [PASS]
 ─────────────────────────────────────────
+```
 
 ### Requirements
 
