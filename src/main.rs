@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use colored::Colorize;
-use ndarray::{Array1, Array2, Axis, s};
+use ndarray::{Array1, Array2, Axis};
+use rand::seq::SliceRandom;
 use rand_distr::{Distribution, Normal};
 use std::{
     fs::{self, File},
@@ -90,7 +91,6 @@ fn test_model() {
 
         let is_correct = real_number == predicted.0;
 
-        // Color-coded result indicator: [1] for correct, [0] for incorrect
         let result_marker = if is_correct {
             correct += 1;
             "[1]".green()
@@ -153,6 +153,8 @@ fn train_model() {
     );
     let training_images = load_images(training_images_path, sample_count);
 
+    // taining dataset indices for shuffling
+    let mut indices: Vec<usize> = (0..training_images.nrows()).collect();
     println!(
         "{} Dataset loaded: {} samples, {} classes",
         "[+]".green(),
@@ -246,11 +248,13 @@ fn train_model() {
         let mut correct = 0;
         let mut total_loss = 0.0_f64;
 
-        for (i, batch) in training_images
-            .axis_chunks_iter(Axis(0), batch_size)
-            .enumerate()
-        {
-            // for (i, row) in training_images.rows().into_iter().enumerate() {
+        // for (i, batch) in training_images
+        //     .axis_chunks_iter(Axis(0), batch_size)
+        //     .enumerate()
+        // {
+        for batch_indices in indices.chunks(batch_size) {
+            let batch = training_images.select(Axis(0), batch_indices);
+            let batch_labels = training_labels.select(Axis(0), batch_indices);
             // -----------------------------------------------------------------
             // Forward pass
             // -----------------------------------------------------------------
@@ -289,7 +293,8 @@ fn train_model() {
             // This is the error signal for the output layer.
             // Shape: [N x 10]
 
-            let label_row = training_labels.slice(s![i * batch_size..(i + 1) * batch_size, ..]);
+            // let label_row = training_labels.slice(s![i * batch_size..(i + 1) * batch_size, ..]);
+            let label_row = batch_labels;
             let dz2 = &output - &label_row;
 
             // Track cross-entropy loss for logging: -sum(y * log(p))
@@ -384,6 +389,10 @@ fn train_model() {
             avg_loss,
             accuracy
         );
+
+        // shuffle indices
+        let mut rng = rand::rng();
+        indices.shuffle(&mut rng);
     }
 
     println!("{} Training complete. Saving model...", "[*]".cyan());
